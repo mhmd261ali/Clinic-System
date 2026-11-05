@@ -5,7 +5,10 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import { Screen } from '../../../components/Screen';
 import { Banner, Chip, DateField, Field, PageTitle, TherapyPill, font, therapySurface } from '../../../components/ui';
 import { api } from '../../../lib/api';
-import { GENDERS, PATIENT_TYPES, PAYER_TYPES, WIDE, addDays, hasSessionQuota, sessionQuotaLabel, todayISO } from '../../../lib/format';
+import { useAuth } from '../../../lib/auth';
+import { isClinician } from '../../../lib/permissions';
+import { GENDERS, PAYER_TYPES, WIDE, addDays, hasSessionQuota, sessionQuotaLabel, todayISO } from '../../../lib/format';
+import { useTherapies } from '../../../lib/therapies';
 import type { Patient } from '../../../lib/types';
 const SORTS = [
   { id: 'name-asc', label: 'Name A–Z' },
@@ -24,8 +27,12 @@ function nextSessionDate(patient: Patient) {
 
 export default function PatientsScreen() {
   const router = useRouter();
+  const { user } = useAuth();
   const { width } = useWindowDimensions();
   const wide = width >= WIDE;
+  const clinician = user ? isClinician(user.role) : false;
+  const therapies = useTherapies();
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [patients, setPatients] = useState<Patient[]>([]);
   const [type, setType] = useState('All');
@@ -114,15 +121,19 @@ export default function PatientsScreen() {
 
   const filters = (
     <View className={`rounded-2xl border border-line bg-card p-4 ${wide ? 'w-80' : 'mb-6'}`}>
+      {clinician ? null : (
+        <>
       <Text style={font.medium} className="mb-2 text-xs uppercase tracking-widest text-moss">
         Type
       </Text>
       <View className="flex-row flex-wrap">
         <Chip label="All" active={type === 'All'} onPress={() => setType('All')} />
-        {PATIENT_TYPES.map((item) => (
+        {therapies.map((item) => (
           <Chip key={item} label={item} active={type === item} onPress={() => setType(item)} />
         ))}
       </View>
+        </>
+      )}
       <Text style={font.medium} className="mb-2 mt-3 text-xs uppercase tracking-widest text-moss">
         Patient type
       </Text>
@@ -189,7 +200,12 @@ export default function PatientsScreen() {
         </View>
       ) : (
         <View>
-          {filters}
+          <Pressable accessibilityRole="button" onPress={() => setFiltersOpen((open) => !open)} className="mb-4 self-start rounded-full border border-line bg-card px-3 py-2">
+            <Text style={font.medium} className="text-sm text-ink">
+              {filtersOpen ? 'Hide filters' : 'Filter'}
+            </Text>
+          </Pressable>
+          {filtersOpen ? filters : null}
           {list}
         </View>
       )}

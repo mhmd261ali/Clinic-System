@@ -19,7 +19,7 @@ export default function RootLayout() {
   });
 
   useEffect(() => {
-    if (Platform.OS === 'web') document.title = 'Halden Clinic';
+    if (Platform.OS === 'web') document.title = 'PhysioCore';
   }, []);
 
   if (!loaded && !error) return <View className="flex-1 bg-paper" />;

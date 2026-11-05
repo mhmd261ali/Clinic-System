@@ -6,7 +6,7 @@ import { Screen } from '../../components/Screen';
 import { Banner, Button, Chip, Field, PageTitle, RolePill, TherapyPill, confirmAction, font, therapySurface } from '../../components/ui';
 import { api } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
-import { PATIENT_TYPES } from '../../lib/format';
+import { useTherapies } from '../../lib/therapies';
 import { canManageStaff } from '../../lib/permissions';
 import type { Role, User } from '../../lib/types';
 
@@ -37,11 +37,13 @@ function draftFrom(person: User): AccountDraft {
 function AccountFields({
   draft,
   onChange,
+  therapies,
   passwordLabel,
   passwordPlaceholder,
 }: {
   draft: AccountDraft;
   onChange: (next: AccountDraft) => void;
+  therapies: string[];
   passwordLabel: string;
   passwordPlaceholder?: string;
 }) {
@@ -83,7 +85,7 @@ function AccountFields({
       </Text>
       <View className="flex-row flex-wrap">
         <Chip label="None" active={draft.therapy == null} onPress={() => onChange({ ...draft, therapy: null })} />
-        {PATIENT_TYPES.map((item) => (
+        {(draft.therapy && !therapies.includes(draft.therapy) ? [...therapies, draft.therapy] : therapies).map((item) => (
           <Chip key={item} label={item} active={draft.therapy === item} onPress={() => onChange({ ...draft, therapy: item })} />
         ))}
       </View>
@@ -101,9 +103,11 @@ export default function StaffScreen() {
   const [editDraft, setEditDraft] = useState<AccountDraft>(emptyDraft);
   const [error, setError] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
+  const [editError, setEditError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState<'create' | 'save' | null>(null);
   const allowed = user ? canManageStaff(user.role) : false;
+  const therapies = useTherapies();
   const addMaxHeight = height - 32;
 
   const load = useCallback(async () => {
@@ -126,6 +130,7 @@ export default function StaffScreen() {
   function beginEdit(person: User) {
     setEditingId(person.id);
     setEditDraft(draftFrom(person));
+    setEditError(null);
     setError(null);
     setMessage(null);
   }
@@ -180,11 +185,12 @@ export default function StaffScreen() {
   async function saveEdit(person: User) {
     const problem = checkDraft(editDraft, false);
     if (problem) {
-      setError(problem);
+      setEditError(problem);
       setMessage(null);
       return;
     }
     setBusy('save');
+    setEditError(null);
     setError(null);
     setMessage(null);
     try {
@@ -200,7 +206,7 @@ export default function StaffScreen() {
       cancelEdit();
       await load();
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Could not update that account.');
+      setEditError(reason instanceof Error ? reason.message : 'Could not update that account.');
     } finally {
       setBusy(null);
     }
@@ -247,9 +253,11 @@ export default function StaffScreen() {
               <AccountFields
                 draft={editDraft}
                 onChange={setEditDraft}
+                therapies={therapies}
                 passwordLabel="Password"
                 passwordPlaceholder="Leave blank to keep it"
               />
+              {editError ? <Banner tone="error">{editError}</Banner> : null}
               <View className="flex-row">
                 <View className="mr-3 flex-1">
                   <Button label={busy === 'save' ? 'Saving…' : 'Save'} disabled={busy != null} onPress={() => void saveEdit(person)} />
@@ -318,7 +326,7 @@ export default function StaffScreen() {
               </Text>
               {formError ? <Banner tone="error">{formError}</Banner> : null}
               <ScrollView style={{ maxHeight: addMaxHeight - 160 }} nestedScrollEnabled keyboardShouldPersistTaps="handled">
-                <AccountFields draft={draft} onChange={setDraft} passwordLabel="Password" />
+                <AccountFields draft={draft} onChange={setDraft} therapies={therapies} passwordLabel="Password" />
               </ScrollView>
               <View className="mt-2 flex-row">
                 <View className="mr-3 flex-1">
@@ -364,6 +372,7 @@ function checkDraft(draft: AccountDraft, passwordRequired: boolean) {
   if (!draft.email.trim().includes('@')) return 'Enter a valid email.';
   if (passwordRequired && draft.password.length < 6) return 'Use a password of at least 6 characters.';
   if (!passwordRequired && draft.password && draft.password.length < 6) return 'Use a password of at least 6 characters.';
-  if (draft.phone.trim().length < 3) return 'Enter a phone number.';
+  if (passwordRequired && draft.phone.trim().length < 3) return 'Enter a phone number.';
+  if (draft.phone.trim() && draft.phone.trim().length < 3) return 'Enter a valid phone number.';
   return null;
 }

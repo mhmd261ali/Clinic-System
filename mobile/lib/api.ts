@@ -2,7 +2,8 @@ import { Platform } from 'react-native';
 import Constants from 'expo-constants';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-import type { DashboardReport, Doctor, DocumentRow, IncomeMonth, Instrument, Patient, PickedFile, Reservation, User, VisitStatus } from './types';
+import type { ClinicSettings, DashboardReport, DeskSummary, Doctor, DocumentRow, IncomeMonth, Instrument, OutcomeMonth, Patient, PatientReport, PickedFile, Reservation, User, VisitStatus } from './types';
+import { toISO } from './format';
 
 const TOKEN_KEY = 'halden.token';
 
@@ -89,16 +90,34 @@ export const api = {
       body: JSON.stringify(body),
     });
   },
+  patientReport(id: number) {
+    return request<PatientReport>(`/api/patients/${id}/report`, { method: 'POST' });
+  },
   deletePatient(id: number) {
     return request<{ ok: true }>(`/api/patients/${id}`, { method: 'DELETE' });
   },
-  reservations(query: { date?: string; from?: string; to?: string; patientId?: number }) {
+  reservations(query: { date?: string; from?: string; to?: string; patientId?: number; pending?: boolean }) {
     const params = new URLSearchParams();
-    if (query.date) params.set('date', query.date);
+    if (query.pending) {
+      const now = new Date();
+      params.set('pending', '1');
+      params.set('date', toISO(now));
+      params.set('time', `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`);
+    } else {
+      if (query.date) params.set('date', query.date);
+    }
     if (query.from) params.set('from', query.from);
     if (query.to) params.set('to', query.to);
     if (query.patientId) params.set('patientId', String(query.patientId));
     return request<{ reservations: Reservation[] }>(`/api/reservations?${params.toString()}`);
+  },
+  deskSummary() {
+    const now = new Date();
+    const params = new URLSearchParams({
+      date: toISO(now),
+      time: `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`,
+    });
+    return request<DeskSummary>(`/api/reservations/summary?${params.toString()}`);
   },
   createReservation(body: Record<string, unknown>) {
     return request<{ reservation: Reservation; overlaps: Reservation[] }>('/api/reservations', {
@@ -123,9 +142,12 @@ export const api = {
     const params = new URLSearchParams({ month });
     return request<DashboardReport>(`/api/dashboard?${params.toString()}`);
   },
-  documents(q: string) {
+  documents(query: { q?: string; patientId?: number; staffId?: number; archive?: boolean } = {}) {
     const params = new URLSearchParams();
-    if (q.trim()) params.set('q', q.trim());
+    if (query.q?.trim()) params.set('q', query.q.trim());
+    if (query.patientId) params.set('patientId', String(query.patientId));
+    if (query.staffId) params.set('staffId', String(query.staffId));
+    if (query.archive) params.set('archive', '1');
     return request<{ documents: DocumentRow[] }>(`/api/documents?${params.toString()}`);
   },
   createDocument(input: { name: string; description?: string; patientId?: number | null; staffId?: number | null; file: PickedFile }) {
@@ -175,11 +197,12 @@ export const api = {
     const query = params.toString();
     return request<{ instruments: Instrument[] }>(`/api/instruments${query ? `?${query}` : ''}`);
   },
-  createInstrument(input: { name: string; usedFor: string; therapyType: string; image: PickedFile }) {
+  createInstrument(input: { name: string; usedFor: string; therapyType: string; price?: string; image: PickedFile }) {
     const body = new FormData();
     body.append('name', input.name);
     body.append('usedFor', input.usedFor);
     body.append('therapyType', input.therapyType);
+    if (input.price) body.append('price', input.price);
     if (Platform.OS === 'web' && input.image.file) {
       body.append('image', input.image.file);
     } else {
@@ -191,7 +214,37 @@ export const api = {
     }
     return request<{ instrument: Instrument }>('/api/instruments', { method: 'POST', body });
   },
+  updateInstrumentPrice(id: number, price: number | null) {
+    return request<{ instrument: Instrument }>(`/api/instruments/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ price }),
+    });
+  },
   deleteInstrument(id: number) {
     return request<{ ok: true }>(`/api/instruments/${id}`, { method: 'DELETE' });
+  },
+  outcome(month: string) {
+    return request<OutcomeMonth>(`/api/expenses?month=${encodeURIComponent(month)}`);
+  },
+  createOutcome(body: {
+    month: string;
+    payments: ({ category: 'salaries'; staffId: number; amount: number } | { category: 'rent' | 'services'; label: string; amount: number })[];
+  }) {
+    return request<OutcomeMonth>('/api/expenses', { method: 'POST', body: JSON.stringify(body) });
+  },
+  deleteOutcome(id: number, month: string) {
+    return request<OutcomeMonth>(`/api/expenses/${id}?month=${encodeURIComponent(month)}`, { method: 'DELETE' });
+  },
+  settings() {
+    return request<ClinicSettings>('/api/settings');
+  },
+  updateSettings(body: ClinicSettings['settings']) {
+    return request<ClinicSettings>('/api/settings', { method: 'PUT', body: JSON.stringify(body) });
+  },
+  therapies() {
+    return request<{ therapies: string[] }>('/api/therapies');
+  },
+  addTherapy(name: string) {
+    return request<{ therapies: string[] }>('/api/therapies', { method: 'POST', body: JSON.stringify({ name }) });
   },
 };

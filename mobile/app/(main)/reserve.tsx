@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { Text, View, useWindowDimensions } from 'react-native';
+import { useState } from 'react';
+import { Pressable, Text, View, useWindowDimensions } from 'react-native';
 import { useLocalSearchParams } from 'expo-router';
 
 import { PatientSearch } from '../../components/PatientSearch';
@@ -7,13 +7,11 @@ import { Screen } from '../../components/Screen';
 import { Banner, Button, Chip, DateField, Field, PageTitle, font } from '../../components/ui';
 import { api } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
-import { DURATIONS, PATIENT_TYPES, START_TIMES, WIDE, addDays, addMinutes, formatClock, formatDay, todayISO } from '../../lib/format';
+import { DURATIONS, START_TIMES, WIDE, addDays, addMinutes, formatClock, formatDay, todayISO } from '../../lib/format';
 import { canEdit } from '../../lib/permissions';
-import type { Doctor, Patient } from '../../lib/types';
+import type { Patient } from '../../lib/types';
 
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
-
-const REASONS = PATIENT_TYPES;
 
 export default function ReserveScreen() {
   const params = useLocalSearchParams<{ date?: string }>();
@@ -25,34 +23,13 @@ export default function ReserveScreen() {
   const [date, setDate] = useState(passedDate);
   const [start, setStart] = useState('10:00');
   const [duration, setDuration] = useState('30');
-  const [reason, setReason] = useState('');
-  const [doctorId, setDoctorId] = useState<number | null>(null);
-  const [doctors, setDoctors] = useState<Doctor[]>([]);
   const [notes, setNotes] = useState('');
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const today = todayISO();
-  const visitTherapy = PATIENT_TYPES.includes(reason)
-    ? reason
-    : patient?.therapyType && PATIENT_TYPES.includes(patient.therapyType)
-      ? patient.therapyType
-      : null;
-
-  useEffect(() => {
-    api.doctors().then((data) => setDoctors(data.doctors)).catch(() => setError('Could not load the doctors.'));
-  }, []);
-
-  useEffect(() => {
-    if (!patient?.therapyType) return;
-    setReason(patient.therapyType);
-    setDoctorId(patient.doctorId ?? null);
-  }, [patient]);
-
-  function chooseReason(item: string) {
-    setReason(item);
-    setDoctorId((current) => (doctors.some((doctor) => doctor.id === current && doctor.therapyType === item) ? current : null));
-  }
+  const reason = patient?.therapyType ?? '';
+  const doctorId = patient?.doctorId ?? null;
 
   async function submit() {
     const startTime = start.trim();
@@ -74,8 +51,8 @@ export default function ReserveScreen() {
       setError('Choose a registered patient.');
       return;
     }
-    if (visitTherapy && !doctorId) {
-      setError('Choose the doctor for this therapy.');
+    if (patient.therapyType && !doctorId) {
+      setError('This patient needs a doctor on file before the visit can be booked.');
       return;
     }
     setBusy(true);
@@ -98,8 +75,6 @@ export default function ReserveScreen() {
       const booked = `Booked ${result.reservation.patientName} for ${formatDay(date)}, ${startTime}–${end}.`;
       setMessage(overlap ? `${booked} This overlaps ${overlap}.` : booked);
       setPatient(null);
-      setReason('');
-      setDoctorId(null);
       setNotes('');
     } catch (reasonError) {
       setError(reasonError instanceof Error ? reasonError.message : 'Could not book the visit.');
@@ -111,6 +86,13 @@ export default function ReserveScreen() {
   const who = (
     <View>
       <PatientSearch selected={patient} onSelect={setPatient} />
+      {patient ? (
+        <Pressable accessibilityRole="button" onPress={() => setPatient(null)} className="mb-4 self-start">
+          <Text style={font.medium} className="text-sm text-moss">
+            Choose a different patient
+          </Text>
+        </Pressable>
+      ) : null}
     </View>
   );
 
@@ -152,38 +134,18 @@ export default function ReserveScreen() {
           />
         ))}
       </View>
-      <Text style={font.medium} className="mb-2 text-xs uppercase tracking-widest text-moss">
+      <Text style={font.medium} className="mb-1 text-xs uppercase tracking-widest text-moss">
         Reason
       </Text>
-      <View className="flex-row flex-wrap">
-        {REASONS.map((item) => (
-          <Chip key={item} label={item} active={reason === item} onPress={() => chooseReason(item)} />
-        ))}
-      </View>
-      <Field
-        label="Or type a reason"
-        value={reason}
-        onChangeText={(value) => {
-          setReason(value);
-          const therapy = PATIENT_TYPES.includes(value) ? value : patient?.therapyType ?? null;
-          setDoctorId((current) => (doctors.some((doctor) => doctor.id === current && doctor.therapyType === therapy) ? current : null));
-        }}
-        placeholder="Intake, review, follow-up"
-      />
-      {visitTherapy ? (
-        <>
-          <Text style={font.medium} className="mb-2 text-xs uppercase tracking-widest text-moss">
-            Doctor
-          </Text>
-          <View className="flex-row flex-wrap">
-            {doctors
-              .filter((doctor) => doctor.therapyType === visitTherapy)
-              .map((doctor) => (
-                <Chip key={doctor.id} label={doctor.name} active={doctorId === doctor.id} onPress={() => setDoctorId(doctor.id)} />
-              ))}
-          </View>
-        </>
-      ) : null}
+      <Text style={font.sans} className="mb-4 text-base text-ink">
+        {patient?.therapyType || 'No therapy on file'}
+      </Text>
+      <Text style={font.medium} className="mb-1 text-xs uppercase tracking-widest text-moss">
+        Doctor
+      </Text>
+      <Text style={font.sans} className="mb-4 text-base text-ink">
+        {patient?.doctorName || 'No doctor on file'}
+      </Text>
       <Field label="Notes" value={notes} onChangeText={setNotes} multiline placeholder="Anything the desk should know" />
       <Button label={busy ? 'Booking…' : 'Book the visit'} disabled={busy} onPress={() => void submit()} />
       {user && !canEdit(user.role) ? (
@@ -199,16 +161,18 @@ export default function ReserveScreen() {
       <PageTitle kicker="Book" title="Add a reservation" detail="Book a visit for someone already registered." />
       {message ? <Banner tone="ok">{message}</Banner> : null}
       {error ? <Banner tone="error">{error}</Banner> : null}
-      {wide ? (
-        <View className="flex-row">
-          <View className="mr-8 flex-1">{who}</View>
-          <View className="flex-1">{when}</View>
+      {patient && wide ? (
+        <View className="flex-row items-start">
+          <View className="pr-6" style={{ width: '66.666%' }}>
+            {who}
+          </View>
+          <View style={{ width: '33.333%' }}>{when}</View>
         </View>
       ) : (
-        <View>
+        <>
           {who}
-          {when}
-        </View>
+          {patient ? <View className="mt-2">{when}</View> : null}
+        </>
       )}
     </Screen>
   );

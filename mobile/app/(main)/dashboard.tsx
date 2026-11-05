@@ -7,7 +7,7 @@ import { Banner, MonthField, font, therapyTone } from '../../components/ui';
 import { api } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
 import { formatMoney, monthISO, shiftMonthISO } from '../../lib/format';
-import { canSeeIncome } from '../../lib/permissions';
+import { canSeeIncome, isClinician } from '../../lib/permissions';
 import type { DashboardReport } from '../../lib/types';
 
 function dollars(value: number | null | undefined) {
@@ -218,6 +218,7 @@ export default function DashboardScreen() {
   const [report, setReport] = useState<DashboardReport | null>(null);
   const [error, setError] = useState<string | null>(null);
   const showIncome = user ? canSeeIncome(user.role) : false;
+  const clinician = user ? isClinician(user.role) : false;
 
   const load = useCallback(async () => {
     setError(null);
@@ -275,25 +276,40 @@ export default function DashboardScreen() {
       icon: 'people' as const,
       iconColor: '#e07a6a',
     },
-    showIncome
-      ? {
-          label: 'Income',
-          value: dollars(report?.totalIncome ?? 0),
-          hint: 'Recorded payments',
-          hintColor: '#c4921a',
-          tint: '#fbf6e0',
-          icon: 'cash' as const,
-          iconColor: '#c4921a',
-        }
-      : {
-          label: 'Therapists',
-          value: String(therapists.length),
-          hint: 'On the desk',
-          hintColor: '#0f5c5e',
-          tint: '#e7f3f4',
-          icon: 'users' as const,
-          iconColor: '#0f5c5e',
-        },
+    ...(showIncome
+      ? [
+          {
+            label: 'Income',
+            value: dollars(report?.totalIncome ?? 0),
+            hint: 'Recorded payments',
+            hintColor: '#c4921a',
+            tint: '#fbf6e0',
+            icon: 'cash' as const,
+            iconColor: '#c4921a',
+          },
+          {
+            label: 'Expenses',
+            value: dollars(report?.totalOutcome ?? 0),
+            hint: 'Paid out this month',
+            hintColor: '#9b3b36',
+            tint: '#fdecec',
+            icon: 'close' as const,
+            iconColor: '#9b3b36',
+          },
+        ]
+      : clinician
+        ? []
+        : [
+            {
+              label: 'Therapists',
+              value: String(therapists.length),
+              hint: 'On the desk',
+              hintColor: '#0f5c5e',
+              tint: '#e7f3f4',
+              icon: 'users' as const,
+              iconColor: '#0f5c5e',
+            },
+          ]),
   ];
 
   return (
@@ -336,7 +352,20 @@ export default function DashboardScreen() {
         ))}
       </View>
 
-      <View className={wide ? 'mb-5 flex-row items-start' : 'mb-5'}>
+      <View className={clinician ? 'mb-5 flex-row items-stretch' : wide ? 'mb-5 flex-row items-start' : 'mb-5'}>
+        {clinician ? (
+          <View className="mr-4 justify-center p-5" style={[PANEL, { width: wide ? 220 : 148 }]}>
+            <Text style={font.medium} className="text-sm text-ink">
+              All sessions
+            </Text>
+            <Text style={[font.display, { fontVariant: ['tabular-nums'] }]} className="mt-3 text-4xl text-ink">
+              {totalSessions}
+            </Text>
+            <Text style={font.sans} className="mt-2 text-sm text-mute">
+              this month
+            </Text>
+          </View>
+        ) : (
         <View className={wide ? 'mr-4 flex-1' : 'mb-4'} style={PANEL}>
           <View className="px-5 pb-2 pt-5">
             <Text style={font.semibold} className="text-lg text-ink">
@@ -415,8 +444,9 @@ export default function DashboardScreen() {
             );
           })}
         </View>
+        )}
 
-        <View className={wide ? 'w-80' : ''} style={PANEL}>
+        <View className={clinician ? 'flex-1' : wide ? 'w-80' : ''} style={PANEL}>
           <View className="p-5">
             <Text style={font.semibold} className="text-lg text-ink">
               Session mix
@@ -427,6 +457,7 @@ export default function DashboardScreen() {
             <Text style={font.sans} className="mb-4 text-sm text-mute">
               completed of booked sessions
             </Text>
+            {clinician ? null : (
             <View className="mb-4 flex-row">
               {assigned.map((therapy, index) => (
                 <View key={therapy.name} className={index === assigned.length - 1 ? 'flex-1' : 'mr-1.5 flex-1'}>
@@ -442,15 +473,16 @@ export default function DashboardScreen() {
                 </View>
               ))}
             </View>
+            )}
             <View className="flex-row" style={{ marginHorizontal: -4 }}>
               <View className="flex-1" style={{ paddingHorizontal: 4 }}>
                 <MixChip label="Completed" value={completed} color="#22a06b" icon="check" />
               </View>
               <View className="flex-1" style={{ paddingHorizontal: 4 }}>
-                <MixChip label="In clinic" value={arrived} color="#2eb5c0" icon="progress" />
+                <MixChip label="Upcoming" value={scheduled} color="#e07a45" icon="clock" />
               </View>
               <View className="flex-1" style={{ paddingHorizontal: 4 }}>
-                <MixChip label="Upcoming" value={scheduled} color="#e07a45" icon="clock" />
+                <MixChip label="Cancelled" value={cancelled} color="#9b3b36" icon="close" />
               </View>
             </View>
           </View>
@@ -471,6 +503,7 @@ export default function DashboardScreen() {
       </View>
 
       <View className={wide ? 'flex-row items-start' : ''}>
+        {clinician ? null : (
         <View className={wide ? 'mr-4 flex-1' : 'mb-4'} style={PANEL}>
           <View className="px-5 pb-2 pt-5">
             <Text style={font.semibold} className="text-lg text-ink">
@@ -510,8 +543,9 @@ export default function DashboardScreen() {
             })
           )}
         </View>
+        )}
 
-        <View className={wide ? 'flex-1' : ''} style={PANEL}>
+        <View className={clinician || !wide ? 'flex-1' : 'flex-1'} style={PANEL}>
           <View className="flex-row items-center justify-between px-5 pb-2 pt-5">
             <Text style={font.semibold} className="text-lg text-ink">
               Patients

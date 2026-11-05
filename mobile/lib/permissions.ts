@@ -19,3 +19,15 @@ export function canManageStaff(role: Role) {
 export function canSeeIncome(role: Role) {
   return role === 'admin';
 }
+
+export function canSeeOutcome(role: Role) {
+  return role === 'admin';
+}
+
+export function canManageSettings(role: Role) {
+  return role === 'admin';
+}
+
+export function isClinician(role: Role) {
+  return role === 'user';
+}

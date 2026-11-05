@@ -7,6 +7,7 @@ const { pool } = require('../db');
 const { requireAuth, requireRole } = require('../auth');
 const { asyncHandler, fail, text } = require('../http');
 const { uploadsDir } = require('../paths');
+const { actorFrom, assertDomain } = require('../scope');
 
 const ALLOWED = new Set([
   'application/pdf',
@@ -43,6 +44,13 @@ const upload = multer({
 const router = express.Router();
 router.use(requireAuth);
 
+function idQuery(value, label) {
+  if (value == null || value === '') return null;
+  const id = Number(value);
+  if (!Number.isInteger(id)) throw fail(400, `Unknown ${label.toLowerCase()}.`);
+  return id;
+}
+
 const documentSelect = `
   SELECT
     d.id,
@@ -69,17 +77,30 @@ const documentSelect = `
 router.get(
   '/',
   asyncHandler(async (req, res) => {
+    const actor = await actorFrom(req);
+    const archive = req.query.archive === '1';
+    if (actor.limited && !actor.therapyType && !archive) {
+      res.json({ documents: [] });
+      return;
+    }
     const term = String(req.query.q || '').trim();
     const pattern = term ? `%${term}%` : null;
+    const therapy = actor.limited && !archive ? actor.therapyType : null;
+    const patientId = idQuery(req.query.patientId, 'Patient');
+    const staffId = idQuery(req.query.staffId, 'Staff member');
     const { rows } = await pool.query(
       `
       ${documentSelect}
       WHERE d.stored_name IS NOT NULL
         AND ($1::text IS NULL OR d.name ILIKE $1)
+        AND ($2::text IS NULL OR COALESCE(p.therapy_type, s.therapy_type) = $2)
+        AND ($3::int IS NULL OR d.patient_id = $3)
+        AND ($4::int IS NULL OR d.staff_id = $4)
+        AND ($5::boolean = false OR (d.patient_id IS NULL AND d.staff_id IS NULL))
       ORDER BY d.created_at DESC
       LIMIT 200
       `,
-      [pattern],
+      [pattern, therapy, patientId, staffId, archive],
     );
     res.json({
       documents: rows.map(({ storedName, ...document }) => document),
@@ -147,11 +168,19 @@ router.get(
   '/:id/file',
   asyncHandler(async (req, res) => {
     const { rows } = await pool.query(
-      'SELECT file_name, stored_name FROM documents WHERE id = $1',
+      `
+      SELECT d.file_name, d.stored_name, d.patient_id, d.staff_id, COALESCE(p.therapy_type, s.therapy_type) AS "therapyType"
+      FROM documents d
+      LEFT JOIN patients p ON p.id = d.patient_id
+      LEFT JOIN users s ON s.id = d.staff_id
+      WHERE d.id = $1
+      `,
       [req.params.id],
     );
     const row = rows[0];
     if (!row || !row.stored_name) throw fail(404, 'That document has no file.');
+    const actor = await actorFrom(req);
+    if (row.patient_id || row.staff_id) assertDomain(actor, row.therapyType);
     const full = path.resolve(uploadsDir, path.basename(row.stored_name));
     if (!full.startsWith(path.resolve(uploadsDir))) throw fail(400, 'Cannot open that file.');
     if (!fs.existsSync(full)) throw fail(404, 'The file is missing from the server.');

@@ -36,6 +36,11 @@ function localToday() {
   return `${now.getFullYear()}-${month}-${day}`;
 }
 
+function localClock() {
+  const now = new Date();
+  return `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+}
+
 function money(value, label) {
   if (value == null || value === '') return null;
   const amount = Number(value);
@@ -70,6 +75,7 @@ module.exports = {
   isTime,
   minutes,
   localToday,
+  localClock,
   money,
   wholeNumber,
   text,

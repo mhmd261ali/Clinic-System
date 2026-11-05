@@ -5,8 +5,9 @@ const multer = require('multer');
 
 const { pool } = require('../db');
 const { requireAuth, requireRole } = require('../auth');
-const { asyncHandler, fail, text } = require('../http');
-const { THERAPY_SET } = require('../care');
+const { asyncHandler, fail, localToday, money, text } = require('../http');
+const { ensureTherapy } = require('../care');
+const { actorFrom, assertDomain } = require('../scope');
 const { uploadsDir } = require('../paths');
 
 const IMAGES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
@@ -43,6 +44,7 @@ const instrumentSelect = `
     i.file_name AS "fileName",
     i.stored_name AS "storedName",
     i.mime_type AS "mimeType",
+    i.price::float8 AS price,
     u.name AS "addedByName",
     i.created_at AS "createdAt"
   FROM instruments i
@@ -57,8 +59,14 @@ function publicInstrument(row) {
 router.get(
   '/',
   asyncHandler(async (req, res) => {
-    const therapy = text(req.query.therapy, 80, 'Therapy');
-    if (therapy && !THERAPY_SET.has(therapy)) throw fail(400, 'Choose a therapy type.');
+    const actor = await actorFrom(req);
+    if (actor.limited && !actor.therapyType) {
+      res.json({ instruments: [] });
+      return;
+    }
+    let therapy = text(req.query.therapy, 80, 'Therapy');
+    if (therapy) therapy = await ensureTherapy(therapy);
+    if (actor.limited) therapy = actor.therapyType;
     const { rows } = await pool.query(
       `
       ${instrumentSelect}
@@ -84,20 +92,34 @@ router.post(
     });
   },
   asyncHandler(async (req, res) => {
+    const actor = await actorFrom(req);
     const name = text(req.body.name, 160, 'Name');
     const usedFor = text(req.body.usedFor, 2000, 'Used for');
-    const therapyType = text(req.body.therapyType, 80, 'Therapy');
-    if (!therapyType || !THERAPY_SET.has(therapyType)) throw fail(400, 'Choose a therapy type.');
+    let therapyType = text(req.body.therapyType, 80, 'Therapy');
+    if (actor.limited) therapyType = actor.therapyType;
+    therapyType = await ensureTherapy(therapyType);
+    if (!therapyType) throw fail(400, 'Choose a therapy type.');
     if (!name) throw fail(400, 'Name the instrument.');
     if (!usedFor) throw fail(400, 'Say what the instrument is used for.');
     if (!req.file) throw fail(400, 'Add a photo of the instrument.');
+    const price = money(req.body.price, 'Price');
     const { rows } = await pool.query(
       `
-      INSERT INTO instruments (therapy_type, name, used_for, file_name, stored_name, mime_type, added_by)
-      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      INSERT INTO instruments (therapy_type, name, used_for, price, priced_on, file_name, stored_name, mime_type, added_by)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
       RETURNING id
       `,
-      [therapyType, name, usedFor, req.file.originalname, req.file.filename, req.file.mimetype, req.user.id],
+      [
+        therapyType,
+        name,
+        usedFor,
+        price,
+        price == null ? null : localToday(),
+        req.file.originalname,
+        req.file.filename,
+        req.file.mimetype,
+        req.user.id,
+      ],
     );
     const created = await pool.query(`${instrumentSelect} WHERE i.id = $1`, [rows[0].id]);
     res.status(201).json({ instrument: publicInstrument(created.rows[0]) });
@@ -108,16 +130,42 @@ router.get(
   '/:id/image',
   asyncHandler(async (req, res) => {
     const { rows } = await pool.query(
-      'SELECT stored_name, mime_type FROM instruments WHERE id = $1',
+      'SELECT stored_name, mime_type, therapy_type AS "therapyType" FROM instruments WHERE id = $1',
       [req.params.id],
     );
     const row = rows[0];
     if (!row || !row.stored_name) throw fail(404, 'That instrument has no photo.');
+    assertDomain(await actorFrom(req), row.therapyType);
     const full = path.resolve(uploadsDir, path.basename(row.stored_name));
     if (!full.startsWith(path.resolve(uploadsDir))) throw fail(400, 'Cannot open that file.');
     if (!fs.existsSync(full)) throw fail(404, 'The photo is missing from the server.');
     res.type(row.mime_type || 'image/jpeg');
     res.sendFile(full);
+  }),
+);
+
+router.patch(
+  '/:id',
+  requireRole('admin'),
+  asyncHandler(async (req, res) => {
+    const price = money(req.body.price, 'Price');
+    const { rows } = await pool.query(
+      `
+      UPDATE instruments
+      SET price = $1,
+          priced_on = CASE
+            WHEN $1::numeric IS NULL THEN NULL
+            WHEN priced_on IS NULL THEN $2::date
+            ELSE priced_on
+          END
+      WHERE id = $3
+      RETURNING id
+      `,
+      [price, localToday(), req.params.id],
+    );
+    if (!rows[0]) throw fail(404, 'Instrument not found.');
+    const updated = await pool.query(`${instrumentSelect} WHERE i.id = $1`, [rows[0].id]);
+    res.json({ instrument: publicInstrument(updated.rows[0]) });
   }),
 );
 

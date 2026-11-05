@@ -1,17 +1,20 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Pressable, ScrollView, Text, View } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 
 import { api } from '../lib/api';
 import { useAuth } from '../lib/auth';
-import { addMinutes, ageFrom, DURATIONS, formatLong, PATIENT_TYPES, PAYER_TYPES, START_TIMES, hasSessionQuota, remainingSessions, todayISO } from '../lib/format';
-import { canEdit } from '../lib/permissions';
-import type { Doctor, Patient, Reservation, VisitStatus } from '../lib/types';
+import { downloadTextFile } from '../lib/files';
+import { addMinutes, ageFrom, DURATIONS, formatLong, PAYER_TYPES, START_TIMES, hasSessionQuota, remainingSessions, todayISO } from '../lib/format';
+import { useTherapies } from '../lib/therapies';
+import { canEdit, isClinician } from '../lib/permissions';
+import type { Doctor, Patient, PatientReport, Reservation, VisitStatus } from '../lib/types';
 import { SessionCounts, SessionList } from './SessionList';
 import { Banner, Button, Chip, Field, TherapyPill, font, therapySurface } from './ui';
 
 export function PatientRecord({ patientId, showBack }: { patientId: number; showBack?: boolean }) {
   const { user } = useAuth();
+  const therapies = useTherapies();
   const router = useRouter();
   const [patient, setPatient] = useState<Patient | null>(null);
   const [visits, setVisits] = useState<Reservation[]>([]);
@@ -31,6 +34,8 @@ export function PatientRecord({ patientId, showBack }: { patientId: number; show
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
+  const [report, setReport] = useState<PatientReport | null>(null);
+  const [writingReport, setWritingReport] = useState(false);
   const [date, setDate] = useState(todayISO());
   const [start, setStart] = useState('09:00');
   const [duration, setDuration] = useState(30);
@@ -38,6 +43,7 @@ export function PatientRecord({ patientId, showBack }: { patientId: number; show
   const [sessionNotes, setSessionNotes] = useState('');
   const [status, setStatus] = useState<VisitStatus>(user && canEdit(user.role) ? 'completed' : 'scheduled');
   const editable = user ? canEdit(user.role) : false;
+  const therapyOptions = user && isClinician(user.role) && user.therapyType ? [user.therapyType] : therapies;
 
   const load = useCallback(async () => {
     setError(null);
@@ -75,6 +81,10 @@ export function PatientRecord({ patientId, showBack }: { patientId: number; show
       void load();
     }, [load]),
   );
+
+  useEffect(() => {
+    setReport(null);
+  }, [patientId]);
 
   async function saveRecord(next?: {
     therapyType?: string | null;
@@ -160,6 +170,28 @@ export function PatientRecord({ patientId, showBack }: { patientId: number; show
     if (saved) setEditingCare(false);
   }
 
+  async function createReport() {
+    if (!patient || writingReport) return;
+    setError(null);
+    setWritingReport(true);
+    try {
+      setReport(await api.patientReport(patient.id));
+    } catch (reasonError) {
+      setError(reasonError instanceof Error ? reasonError.message : 'Could not create the report.');
+    } finally {
+      setWritingReport(false);
+    }
+  }
+
+  async function downloadReport() {
+    if (!report) return;
+    try {
+      await downloadTextFile(report.fileName, report.report);
+    } catch (reasonError) {
+      setError(reasonError instanceof Error ? reasonError.message : 'Could not download the report.');
+    }
+  }
+
   async function addSession() {
     const end = addMinutes(start, duration);
     if (!end) {
@@ -234,7 +266,28 @@ export function PatientRecord({ patientId, showBack }: { patientId: number; show
                 {patient.fullName}
               </Text>
             </View>
-            <TherapyPill therapy={therapy} />
+            <View className="items-end">
+              <TherapyPill therapy={therapy} />
+              <Pressable
+                accessibilityRole="button"
+                disabled={writingReport}
+                onPress={() => void createReport()}
+                className={`mt-3 rounded-full bg-clay px-3 py-2 ${writingReport ? 'opacity-60' : ''}`}
+              >
+                <Text style={font.medium} className="text-sm text-card">
+                  {writingReport ? 'Reading documents…' : 'Create report'}
+                </Text>
+              </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => router.push(`/documents/patient/${patientId}`)}
+                className="mt-2 rounded-full border border-clay bg-card px-3 py-2"
+              >
+                <Text style={font.medium} className="text-sm text-moss">
+                  See documents
+                </Text>
+              </Pressable>
+            </View>
           </View>
           <Text style={font.sans} className="mt-2 text-base leading-6 text-mute">
             {[age != null ? `${age} years` : null, patient.gender, patient.dateOfBirth ? formatLong(patient.dateOfBirth) : null]
@@ -244,6 +297,39 @@ export function PatientRecord({ patientId, showBack }: { patientId: number; show
           <Text style={font.sans} className="mt-1 text-base text-mute">
             {[patient.phone, patient.email].filter(Boolean).join(' · ') || 'No phone or email'}
           </Text>
+
+          {report ? (
+            <View className="mt-5 rounded-2xl border border-line bg-card p-4">
+              <View className="mb-2 flex-row items-center justify-between">
+                <Text style={font.medium} className="text-xs uppercase tracking-widest text-moss">
+                  Report
+                </Text>
+                <View className="flex-row">
+                  <Pressable accessibilityRole="button" onPress={() => void downloadReport()} className="mr-4">
+                    <Text style={font.medium} className="text-sm text-moss">
+                      Download
+                    </Text>
+                  </Pressable>
+                  <Pressable accessibilityRole="button" onPress={() => setReport(null)}>
+                    <Text style={font.medium} className="text-sm text-moss">
+                      Close
+                    </Text>
+                  </Pressable>
+                </View>
+              </View>
+              <Text style={font.sans} className="text-sm text-mute">
+                {`Read ${report.documentsRead === 1 ? '1 document' : `${report.documentsRead} documents`}, the case notes, and the sessions. Saved to this patient's documents.`}
+              </Text>
+              {report.skipped.length > 0 ? (
+                <Text style={font.sans} className="mt-1 text-sm text-mute">
+                  {`Could not read: ${report.skipped.join('; ')}`}
+                </Text>
+              ) : null}
+              <Text selectable style={font.sans} className="mt-3 text-base leading-6 text-ink">
+                {report.report}
+              </Text>
+            </View>
+          ) : null}
 
           <View className="mt-5 rounded-2xl border p-4" style={therapySurface(therapy)}>
             <View className="mb-2 flex-row items-center justify-between">
@@ -260,7 +346,7 @@ export function PatientRecord({ patientId, showBack }: { patientId: number; show
             </View>
             {editingCare ? (
               <View className="flex-row flex-wrap">
-                {PATIENT_TYPES.map((item) => (
+                {therapyOptions.map((item) => (
                   <Chip key={item} label={item} active={therapyChoice === item} onPress={() => chooseTherapy(item)} />
                 ))}
               </View>
@@ -418,7 +504,7 @@ export function PatientRecord({ patientId, showBack }: { patientId: number; show
               <Field label="Session note" value={sessionNotes} onChangeText={setSessionNotes} multiline placeholder="What was covered" />
               {editable ? (
                 <View className="flex-row flex-wrap">
-                  {(['scheduled', 'arrived', 'completed', 'cancelled'] as VisitStatus[]).map((item) => (
+                  {(['scheduled', 'completed', 'cancelled'] as VisitStatus[]).map((item) => (
                     <Chip key={item} label={item} active={status === item} onPress={() => setStatus(item)} />
                   ))}
                 </View>

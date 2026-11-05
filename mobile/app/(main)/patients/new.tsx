@@ -5,11 +5,17 @@ import { useRouter } from 'expo-router';
 import { Screen } from '../../../components/Screen';
 import { Banner, Button, Chip, DateField, Field, PageTitle, font } from '../../../components/ui';
 import { api } from '../../../lib/api';
-import { GENDERS, PATIENT_TYPES, PAYER_TYPES, hasSessionQuota, todayISO } from '../../../lib/format';
+import { useAuth } from '../../../lib/auth';
+import { isClinician } from '../../../lib/permissions';
+import { GENDERS, PAYER_TYPES, hasSessionQuota, todayISO } from '../../../lib/format';
+import { useTherapies } from '../../../lib/therapies';
 import type { Doctor } from '../../../lib/types';
 
 export default function NewPatientScreen() {
   const router = useRouter();
+  const { user } = useAuth();
+  const lockedTherapy = user && isClinician(user.role) ? user.therapyType ?? null : null;
+  const therapies = useTherapies();
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
   const [dob, setDob] = useState('');
@@ -24,8 +30,9 @@ export default function NewPatientScreen() {
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
+    if (lockedTherapy) setTherapy(lockedTherapy);
     api.doctors().then((data) => setDoctors(data.doctors)).catch(() => setError('Could not load the doctors.'));
-  }, []);
+  }, [lockedTherapy]);
 
   function chooseTherapy(item: string) {
     setTherapy(item);
@@ -121,14 +128,22 @@ export default function NewPatientScreen() {
           placeholder="12"
         />
       ) : null}
+      {lockedTherapy ? (
+        <Text style={font.sans} className="mb-4 text-base text-ink">
+          {lockedTherapy}
+        </Text>
+      ) : (
+        <>
       <Text style={font.medium} className="mb-2 text-xs uppercase tracking-widest text-moss">
         Therapy type
       </Text>
       <View className="mb-4 flex-row flex-wrap">
-        {PATIENT_TYPES.map((item) => (
+        {therapies.map((item) => (
           <Chip key={item} label={item} active={therapy === item} onPress={() => chooseTherapy(item)} />
         ))}
       </View>
+        </>
+      )}
       <Text style={font.medium} className="mb-2 text-xs uppercase tracking-widest text-moss">
         Doctor following the case
       </Text>

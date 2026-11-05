@@ -8,8 +8,9 @@ import { Screen } from '../../components/Screen';
 import { Banner, Button, Chip, Field, PageTitle, TherapyPill, confirmAction, font, therapySurface } from '../../components/ui';
 import { api } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
-import { PATIENT_TYPES, WIDE } from '../../lib/format';
-import { canDelete } from '../../lib/permissions';
+import { WIDE, formatMoney } from '../../lib/format';
+import { useTherapies } from '../../lib/therapies';
+import { canDelete, isClinician } from '../../lib/permissions';
 import type { Instrument, PickedFile } from '../../lib/types';
 
 export default function InstrumentsScreen() {
@@ -22,11 +23,17 @@ export default function InstrumentsScreen() {
   const [name, setName] = useState('');
   const [usedFor, setUsedFor] = useState('');
   const [formTherapy, setFormTherapy] = useState<string | null>(null);
+  const [price, setPrice] = useState('');
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [priceDraft, setPriceDraft] = useState('');
   const [image, setImage] = useState<PickedFile | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const remove = user ? canDelete(user.role) : false;
+  const lockedTherapy = user && isClinician(user.role) ? user.therapyType ?? null : null;
+  const therapies = useTherapies();
+  const priceEditable = user?.role === 'admin';
 
   const load = useCallback(async () => {
     try {
@@ -44,24 +51,26 @@ export default function InstrumentsScreen() {
     }, [load]),
   );
 
+  const activeTherapy = lockedTherapy ?? therapy;
   const visible = useMemo(
-    () => instruments.filter((item) => !therapy || item.therapyType === therapy),
-    [instruments, therapy],
+    () => instruments.filter((item) => !activeTherapy || item.therapyType === activeTherapy),
+    [instruments, activeTherapy],
   );
 
   const groups = useMemo(() => {
-    const types = therapy ? [therapy] : PATIENT_TYPES;
+    const types = activeTherapy ? [activeTherapy] : therapies;
     return types.map((type) => ({
       type,
       items: visible.filter((item) => item.therapyType === type),
     }));
-  }, [therapy, visible]);
+  }, [activeTherapy, therapies, visible]);
 
   function beginAdd() {
     setAdding(true);
-    setFormTherapy(therapy);
+    setFormTherapy(lockedTherapy ?? therapy);
     setName('');
     setUsedFor('');
+    setPrice('');
     setImage(null);
     setError(null);
     setMessage(null);
@@ -71,6 +80,7 @@ export default function InstrumentsScreen() {
     setAdding(false);
     setName('');
     setUsedFor('');
+    setPrice('');
     setImage(null);
     setFormTherapy(null);
   }
@@ -117,6 +127,7 @@ export default function InstrumentsScreen() {
         name: name.trim(),
         usedFor: usedFor.trim(),
         therapyType: formTherapy,
+        price: price.trim(),
         image,
       });
       setMessage(`Added ${name.trim()}.`);
@@ -126,6 +137,23 @@ export default function InstrumentsScreen() {
       setError(reason instanceof Error ? reason.message : 'Could not add that instrument.');
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function savePrice(item: Instrument) {
+    const trimmed = priceDraft.trim();
+    const next = trimmed === '' ? null : Number(trimmed);
+    if (next != null && (!Number.isFinite(next) || next < 0)) {
+      setError('Enter a valid price.');
+      return;
+    }
+    setError(null);
+    try {
+      await api.updateInstrumentPrice(item.id, next);
+      setEditingId(null);
+      await load();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Could not save that price.');
     }
   }
 
@@ -145,14 +173,22 @@ export default function InstrumentsScreen() {
       <Text style={font.display} className="mb-4 text-2xl text-ink">
         Add an instrument
       </Text>
+      {lockedTherapy ? (
+        <Text style={font.sans} className="mb-3 text-base text-ink">
+          {lockedTherapy}
+        </Text>
+      ) : (
+        <>
       <Text style={font.medium} className="mb-2 text-xs uppercase tracking-widest text-moss">
         Therapy
       </Text>
       <View className="flex-row flex-wrap">
-        {PATIENT_TYPES.map((item) => (
+        {therapies.map((item) => (
           <Chip key={item} label={item} active={formTherapy === item} onPress={() => setFormTherapy(item)} />
         ))}
       </View>
+        </>
+      )}
       {formTherapy ? null : (
         <Text style={[font.sans, { color: '#9b3b36' }]} className="mb-3 text-sm leading-5">
           Choose a therapy first so this instrument is listed with the right tools.
@@ -166,6 +202,7 @@ export default function InstrumentsScreen() {
         multiline
         placeholder="What this instrument is used for"
       />
+      <Field label="Price" value={price} onChangeText={setPrice} placeholder="0" keyboardType="decimal-pad" />
       <Pressable accessibilityRole="button" onPress={() => void pickImage()} className="mb-4 rounded-xl border border-dashed border-line bg-card px-3 py-4">
         <Text style={font.medium} className="text-sm text-ink">
           {image ? image.name : 'Choose a photo'}
@@ -204,15 +241,19 @@ export default function InstrumentsScreen() {
       {error ? <Banner tone="error">{error}</Banner> : null}
       <View className={wide && adding ? 'flex-row items-start' : ''}>
         <View className={wide && adding ? 'flex-1' : ''}>
+          {lockedTherapy ? null : (
+            <>
           <Text style={font.medium} className="mb-2 text-xs uppercase tracking-widest text-moss">
             Therapy
           </Text>
           <View className="mb-4 flex-row flex-wrap">
             <Chip label="All" active={therapy == null} onPress={() => setTherapy(null)} />
-            {PATIENT_TYPES.map((item) => (
+            {therapies.map((item) => (
               <Chip key={item} label={item} active={therapy === item} onPress={() => setTherapy(item)} />
             ))}
           </View>
+            </>
+          )}
           {groups.map((group) => (
             <View key={group.type} className="mb-6">
               {therapy ? null : (
@@ -238,6 +279,38 @@ export default function InstrumentsScreen() {
                       <Text style={font.sans} className="mt-1 text-sm leading-5 text-mute">
                         {item.usedFor}
                       </Text>
+                      {editingId === item.id ? (
+                        <View className="mt-2 flex-row items-center">
+                          <View className="mr-2 flex-1">
+                            <Field value={priceDraft} onChangeText={setPriceDraft} placeholder="0" keyboardType="decimal-pad" />
+                          </View>
+                          <Pressable accessibilityRole="button" onPress={() => void savePrice(item)} className="mb-4">
+                            <Text style={font.medium} className="text-sm text-moss">
+                              Save
+                            </Text>
+                          </Pressable>
+                        </View>
+                      ) : (
+                        <View className="mt-2 flex-row items-center">
+                          <Text style={font.semibold} className="mr-2 text-sm text-ink">
+                            {item.price != null ? `$${formatMoney(item.price)}` : 'No price'}
+                          </Text>
+                          {priceEditable ? (
+                            <Pressable
+                              accessibilityRole="button"
+                              accessibilityLabel={`Edit price for ${item.name}`}
+                              onPress={() => {
+                                setEditingId(item.id);
+                                setPriceDraft(item.price != null ? String(item.price) : '');
+                              }}
+                            >
+                              <Text style={font.medium} className="text-base text-moss">
+                                ✎
+                              </Text>
+                            </Pressable>
+                          ) : null}
+                        </View>
+                      )}
                       {remove ? (
                         <Pressable accessibilityRole="button" onPress={() => void removeInstrument(item)} className="mt-2 self-start">
                           <Text style={font.medium} className="text-xs text-moss">

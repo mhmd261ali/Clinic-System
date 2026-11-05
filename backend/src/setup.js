@@ -169,7 +169,7 @@ async function runSetup() {
     await seedInstruments((text, params) => client.query(text, params), adminId, uploadsDir);
 
     await client.query('COMMIT');
-    console.log('Halden demo desk is ready.');
+    console.log('PhysioCore demo desk is ready.');
   } catch (error) {
     await client.query('ROLLBACK');
     throw error;

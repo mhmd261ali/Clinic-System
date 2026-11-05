@@ -2,8 +2,9 @@ const express = require('express');
 
 const { pool } = require('../db');
 const { requireAuth, requireRole } = require('../auth');
-const { asyncHandler, fail, isDate, isTime, minutes, money, text } = require('../http');
+const { asyncHandler, fail, isDate, isTime, localToday, minutes, money, text } = require('../http');
 const { therapyOf, doctorFor } = require('../care');
+const { THERAPY_EXPR, actorFrom, assertDomain } = require('../scope');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -81,12 +82,74 @@ function scheduleFrom(body) {
   };
 }
 
+const STATUSES = ['scheduled', 'completed', 'cancelled'];
+
+router.get(
+  '/summary',
+  asyncHandler(async (req, res) => {
+    const actor = await actorFrom(req);
+    const date = isDate(req.query.date) ? req.query.date : localToday();
+    const time = isTime(req.query.time) ? req.query.time : '00:00';
+    const runningParams = [date, time];
+    const pendingParams = [date, time];
+    let runningScope = '';
+    let pendingScope = '';
+    if (actor.limited) {
+      runningParams.push(actor.id);
+      runningScope = `AND r.doctor_id = $${runningParams.length}`;
+      if (actor.therapyType) {
+        pendingParams.push(actor.therapyType);
+        pendingScope = `AND ${THERAPY_EXPR} = $${pendingParams.length}`;
+      } else {
+        pendingParams.push(actor.id);
+        pendingScope = `AND r.doctor_id = $${pendingParams.length}`;
+      }
+    }
+    const [running, pending] = await Promise.all([
+      pool.query(
+        `
+        SELECT COUNT(*)::int AS count
+        FROM reservations r
+        JOIN patients p ON p.id = r.patient_id
+        LEFT JOIN users doc ON doc.id = r.doctor_id
+        WHERE r.status IN ('scheduled', 'arrived')
+          AND r.scheduled_date = $1::date
+          AND r.start_time <= $2::time
+          AND r.end_time > $2::time
+          ${runningScope}
+        `,
+        runningParams,
+      ),
+      pool.query(
+        `
+        SELECT COUNT(*)::int AS count
+        FROM reservations r
+        JOIN patients p ON p.id = r.patient_id
+        LEFT JOIN users doc ON doc.id = r.doctor_id
+        WHERE r.status IN ('scheduled', 'arrived')
+          AND (
+            r.scheduled_date < $1::date
+            OR (r.scheduled_date = $1::date AND r.end_time <= $2::time)
+          )
+          ${pendingScope}
+        `,
+        pendingParams,
+      ),
+    ]);
+    res.json({
+      running: (running.rows[0]?.count || 0) > 0,
+      pending: pending.rows[0]?.count || 0,
+    });
+  }),
+);
+
 router.get(
   '/',
   asyncHandler(async (req, res) => {
+    const actor = await actorFrom(req);
     const clauses = [];
     const params = [];
-    if (isDate(req.query.date)) {
+    if (isDate(req.query.date) && req.query.pending !== '1') {
       params.push(req.query.date);
       clauses.push(`r.scheduled_date = $${params.length}::date`);
     }
@@ -104,6 +167,23 @@ router.get(
       params.push(patientId);
       clauses.push(`r.patient_id = $${params.length}`);
     }
+    if (req.query.pending === '1') {
+      const date = isDate(req.query.date) ? req.query.date : localToday();
+      const time = isTime(req.query.time) ? req.query.time : '00:00';
+      params.push(date, time);
+      const dateIndex = params.length - 1;
+      const timeIndex = params.length;
+      clauses.push(`r.status IN ('scheduled', 'arrived')`);
+      clauses.push(`(r.scheduled_date < $${dateIndex}::date OR (r.scheduled_date = $${dateIndex}::date AND r.end_time <= $${timeIndex}::time))`);
+    }
+    if (actor.limited) {
+      if (!actor.therapyType) {
+        res.json({ reservations: [] });
+        return;
+      }
+      params.push(actor.therapyType);
+      clauses.push(`${THERAPY_EXPR} = $${params.length}`);
+    }
     const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
     const { rows } = await pool.query(
       `${reservationSelect} ${where} ORDER BY r.scheduled_date, r.start_time, r.id`,
@@ -116,9 +196,10 @@ router.get(
 router.post(
   '/',
   asyncHandler(async (req, res) => {
+    const actor = await actorFrom(req);
     const schedule = scheduleFrom(req.body);
     const status = req.body.status || 'scheduled';
-    if (!['scheduled', 'arrived', 'completed', 'cancelled'].includes(status)) {
+    if (!STATUSES.includes(status)) {
       throw fail(400, 'Unknown visit status.');
     }
     if (status !== 'scheduled' && !['admin', 'sub-admin'].includes(req.user.role)) {
@@ -132,7 +213,10 @@ router.post(
       if (!Number.isInteger(patientId)) throw fail(400, 'Choose a registered patient.');
       const found = await client.query('SELECT id, therapy_type FROM patients WHERE id = $1', [patientId]);
       if (!found.rows[0]) throw fail(404, 'Patient not found.');
-      const therapy = therapyOf(schedule.reason) || therapyOf(found.rows[0].therapy_type);
+      assertDomain(actor, found.rows[0].therapy_type);
+      const named = await therapyOf(schedule.reason);
+      const onFile = await therapyOf(found.rows[0].therapy_type);
+      const therapy = actor.limited ? actor.therapyType : named || onFile;
       const doctor = await doctorFor(req.body.doctorId, therapy);
       if (therapy && !doctor.doctorId) throw fail(400, 'Choose a doctor for this therapy.');
 
@@ -172,10 +256,17 @@ router.post(
 
 router.patch(
   '/:id',
-  requireRole('admin', 'sub-admin'),
   asyncHandler(async (req, res) => {
+    const actor = await actorFrom(req);
     const current = await findReservation(req.params.id);
     if (!current) throw fail(404, 'Visit not found.');
+    const desk = actor.role === 'admin' || actor.role === 'sub-admin';
+    if (!desk) {
+      const owns =
+        current.doctorId === actor.id ||
+        (actor.therapyType && current.therapyType === actor.therapyType);
+      if (!owns) throw fail(403, 'That session is outside your therapy.');
+    }
     const next = {
       scheduledDate: req.body.scheduledDate ?? current.scheduledDate,
       startTime: req.body.startTime ?? current.startTime,
@@ -191,8 +282,15 @@ router.patch(
     if (minutes(next.endTime) <= minutes(next.startTime)) {
       throw fail(400, 'The visit has to end after it starts.');
     }
-    if (!['scheduled', 'arrived', 'completed', 'cancelled'].includes(next.status)) {
+    if (next.status === 'arrived') next.status = 'scheduled';
+    if (!STATUSES.includes(next.status)) {
       throw fail(400, 'Unknown visit status.');
+    }
+    if (!desk) {
+      next.scheduledDate = current.scheduledDate;
+      next.startTime = current.startTime;
+      next.endTime = current.endTime;
+      next.reason = current.reason;
     }
     await pool.query(
       `

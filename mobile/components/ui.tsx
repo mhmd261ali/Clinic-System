@@ -26,7 +26,9 @@ export const THERAPY_TONE: Record<string, { label: string; bg: string; fg: strin
 export const THERAPY_FALLBACK = { label: 'Unassigned', bg: '#f3f4f8', fg: '#4a4e6a', line: '#cfd2de', mark: '#8b90b0' };
 
 export function therapyTone(therapy?: string | null) {
-  return (therapy && THERAPY_TONE[therapy]) || THERAPY_FALLBACK;
+  if (therapy && THERAPY_TONE[therapy]) return THERAPY_TONE[therapy];
+  if (therapy) return { ...THERAPY_FALLBACK, label: therapy };
+  return THERAPY_FALLBACK;
 }
 
 export function therapySurface(therapy?: string | null) {

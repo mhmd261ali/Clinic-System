@@ -98,6 +98,7 @@ export type DashboardReport = {
   arrived: number;
   scheduled: number;
   cancelled: number;
+  totalOutcome?: number;
   therapies: DashboardTherapy[];
   therapists: DashboardNamedCount[];
   patients: DashboardNamedCount[];
@@ -128,8 +129,54 @@ export type Instrument = {
   fileName: string | null;
   mimeType: string | null;
   hasImage: boolean;
+  price?: number | null;
   addedByName: string | null;
   createdAt: string;
+};
+
+export type OutcomeItem = {
+  id: number;
+  label: string;
+  amount: number;
+  therapyType?: string | null;
+};
+
+export type OutcomeCategory = {
+  key: 'salaries' | 'rent' | 'services' | 'equipment';
+  label: string;
+  total: number;
+  items: OutcomeItem[];
+};
+
+export type OutcomeMonth = {
+  month: string;
+  total: number;
+  categories: OutcomeCategory[];
+};
+
+export type ReminderSettings = {
+  mode: 'before' | 'tomorrow';
+  reminderHours: number;
+  reminderTime: string;
+};
+
+export type ClinicSettings = {
+  choices: number[];
+  times: string[];
+  settings: ReminderSettings;
+};
+
+export type DeskSummary = {
+  running: boolean;
+  pending: number;
+};
+
+export type PatientReport = {
+  report: string;
+  fileName: string;
+  documentId: number;
+  documentsRead: number;
+  skipped: string[];
 };
 
 export type PickedFile = {

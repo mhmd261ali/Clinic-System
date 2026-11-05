@@ -4,7 +4,7 @@ const bcrypt = require('bcryptjs');
 const { pool } = require('../db');
 const { requireAuth, requireRole } = require('../auth');
 const { asyncHandler, fail, EMAIL, ROLES, text } = require('../http');
-const { THERAPY_SET } = require('../care');
+const { ensureTherapy } = require('../care');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -13,7 +13,7 @@ const userColumns = `
   id, name, email, phone, role, therapy_type AS "therapyType", created_at AS "createdAt"
 `;
 
-function accountInput(body, passwordRequired) {
+function accountInput(body, { passwordRequired, phoneRequired }) {
   const name = text(body.name, 120, 'Name');
   const email = String(body.email || '').trim().toLowerCase();
   const password = String(body.password || '');
@@ -25,9 +25,9 @@ function accountInput(body, passwordRequired) {
   if (passwordRequired || password) {
     if (password.length < 6) throw fail(400, 'Use a password of at least 6 characters.');
   }
-  if (!phone || phone.length < 3) throw fail(400, 'Enter a phone number.');
+  if (phone && phone.length < 3) throw fail(400, 'Enter a valid phone number.');
+  if (phoneRequired && !phone) throw fail(400, 'Enter a phone number.');
   if (!ROLES.includes(role)) throw fail(400, 'Choose admin, sub-admin, or user.');
-  if (therapyType && !THERAPY_SET.has(therapyType)) throw fail(400, 'Choose a therapy type.');
   return { name, email, password, role, phone, therapyType };
 }
 
@@ -51,7 +51,8 @@ router.use(requireRole('admin'));
 router.post(
   '/',
   asyncHandler(async (req, res) => {
-    const account = accountInput(req.body, true);
+    const account = accountInput(req.body, { passwordRequired: true, phoneRequired: true });
+    account.therapyType = await ensureTherapy(account.therapyType);
     const { rows } = await pool.query(
       `
       INSERT INTO users (name, email, password_hash, role, phone, therapy_type)
@@ -67,7 +68,8 @@ router.post(
 router.patch(
   '/:id',
   asyncHandler(async (req, res) => {
-    const account = accountInput(req.body, false);
+    const account = accountInput(req.body, { passwordRequired: false, phoneRequired: false });
+    account.therapyType = await ensureTherapy(account.therapyType);
     const values = [account.name, account.email, account.phone, account.role, account.therapyType];
     let passwordSql = '';
     if (account.password) {

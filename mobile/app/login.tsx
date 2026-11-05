@@ -61,7 +61,7 @@ export default function LoginScreen() {
         autoCapitalize="none"
         autoCorrect={false}
         keyboardType="email-address"
-        placeholder="you@halden.clinic"
+        placeholder="you@physiocore.clinic"
         placeholderTextColor="#7a9495"
         className="mb-4 rounded-xl border border-line bg-card px-3 py-3 text-base text-ink"
         style={font.sans}
@@ -131,10 +131,10 @@ export default function LoginScreen() {
       <View className={wide ? 'w-[46%] justify-between bg-pine px-12 py-16' : 'bg-pine px-6 py-8'} style={wide ? { paddingTop: Math.max(insets.top, 48) } : undefined}>
         <View>
           <Text style={font.medium} className="text-xs uppercase tracking-widest text-sand">
-            Halden Clinic
+            PhysioCore
           </Text>
           <Text style={font.display} className={`text-card ${wide ? 'mt-4 text-6xl' : 'mt-2 text-4xl'}`}>
-            Halden
+            PhysioCore
           </Text>
           <Text style={font.sans} className="mt-3 max-w-sm text-base leading-6 text-sand">
             Today’s book, the month, and the sessions for each patient.

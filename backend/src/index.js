@@ -16,6 +16,9 @@ const doctorRoutes = require('./routes/doctors');
 const instrumentRoutes = require('./routes/instruments');
 const incomeRoutes = require('./routes/income');
 const dashboardRoutes = require('./routes/dashboard');
+const expenseRoutes = require('./routes/expenses');
+const settingsRoutes = require('./routes/settings');
+const therapyRoutes = require('./routes/therapies');
 
 const app = express();
 app.disable('x-powered-by');
@@ -35,6 +38,9 @@ app.use('/api/doctors', doctorRoutes);
 app.use('/api/instruments', instrumentRoutes);
 app.use('/api/income', incomeRoutes);
 app.use('/api/dashboard', dashboardRoutes);
+app.use('/api/expenses', expenseRoutes);
+app.use('/api/settings', settingsRoutes);
+app.use('/api/therapies', therapyRoutes);
 
 app.use('/api', (_req, res) => {
   res.status(404).json({ error: 'Not found.' });
@@ -80,9 +86,52 @@ async function main() {
   await pool.query(`ALTER TABLE patients ADD COLUMN IF NOT EXISTS sessions_allotted INTEGER`);
   await pool.query(`ALTER TABLE reservations ADD COLUMN IF NOT EXISTS amount_paid NUMERIC(12, 2)`);
   await pool.query('DELETE FROM documents WHERE stored_name IS NULL OR file_name IS NULL');
+  await pool.query('ALTER TABLE instruments ADD COLUMN IF NOT EXISTS price NUMERIC(12, 2)');
+  await pool.query('ALTER TABLE instruments ADD COLUMN IF NOT EXISTS priced_on DATE');
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS expenses (
+      id SERIAL PRIMARY KEY,
+      kind TEXT NOT NULL CHECK (kind IN ('salary', 'rent', 'service')),
+      month TEXT NOT NULL,
+      amount NUMERIC(12, 2) NOT NULL,
+      staff_id INTEGER REFERENCES users (id) ON DELETE SET NULL,
+      label TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS clinic_settings (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      reminder_mode TEXT NOT NULL DEFAULT 'hours' CHECK (reminder_mode IN ('hours', 'tomorrow')),
+      reminder_hours INTEGER NOT NULL DEFAULT 24,
+      reminder_time TIME NOT NULL DEFAULT '18:00'
+    )
+  `);
+  await pool.query(`ALTER TABLE clinic_settings ADD COLUMN IF NOT EXISTS reminder_mode TEXT NOT NULL DEFAULT 'hours'`);
+  await pool.query(`ALTER TABLE clinic_settings ADD COLUMN IF NOT EXISTS reminder_hours INTEGER NOT NULL DEFAULT 24`);
+  await pool.query(`ALTER TABLE clinic_settings ADD COLUMN IF NOT EXISTS reminder_time TIME NOT NULL DEFAULT '18:00'`);
+  await pool.query(`
+    INSERT INTO clinic_settings (id, reminder_mode, reminder_hours, reminder_time)
+    VALUES (1, 'hours', 24, '18:00')
+    ON CONFLICT (id) DO NOTHING
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS therapies (
+      name TEXT PRIMARY KEY,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  await pool.query(`
+    INSERT INTO therapies (name)
+    SELECT seed.name
+    FROM (VALUES ('Occupational therapy'), ('Speech therapy'), ('Physiotherapy')) AS seed(name)
+    WHERE NOT EXISTS (SELECT 1 FROM therapies existing WHERE lower(existing.name) = lower(seed.name))
+  `);
+  await pool.query(`UPDATE reservations SET status = 'scheduled' WHERE status = 'arrived'`);
+  await pool.query(`DELETE FROM reservations WHERE reason = 'Session now' AND notes = 'Live session so the booking dot is visible.'`);
   const port = Number(process.env.PORT || 4000);
   app.listen(port, () => {
-    console.log(`Halden API listening on http://localhost:${port}`);
+    console.log(`PhysioCore API listening on http://localhost:${port}`);
   });
 }
 
